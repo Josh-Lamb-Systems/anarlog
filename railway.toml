@@ -13,7 +13,7 @@ builder = "NIXPACKS"
 
 # --max-old-space-size mirrors the repo's own dev script. The content-collections
 # + Tailwind + Nitro build is memory hungry and OOMs at Node's default heap.
-buildCommand = "NODE_OPTIONS='--max-old-space-size=8192' pnpm install --frozen-lockfile && NODE_OPTIONS='--max-old-space-size=8192' pnpm --filter @anlg/web build"
+buildCommand = "pnpm --filter @anlg/web build"
 
 [deploy]
 # Nitro's default node-server preset reads PORT from the environment, which
