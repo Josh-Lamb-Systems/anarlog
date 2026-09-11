@@ -9,10 +9,10 @@
 # server output is missing. It must run as a Node service.
 
 [build]
-builder = "NIXPACKS"
+# Railpack is Railway's modern builder and handles pnpm dependency resolution
+# more robustly than Nixpacks. Removing the explicit builder directive lets
+# Railway auto-detect Railpack. This fixes the pnpm version conflict instability.
 
-# --max-old-space-size mirrors the repo's own dev script. The content-collections
-# + Tailwind + Nitro build is memory hungry and OOMs at Node's default heap.
 buildCommand = "pnpm --filter @anlg/web build"
 
 [deploy]
@@ -27,3 +27,4 @@ restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 
 numReplicas = 1
+
