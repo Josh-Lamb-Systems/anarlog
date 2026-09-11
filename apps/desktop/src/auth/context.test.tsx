@@ -1161,7 +1161,7 @@ describe("AuthProvider", () => {
     expect(mocks.clearAuthStorage).not.toHaveBeenCalled();
   });
 
-  it("does not sign out a session that wins during cloudsync preflight", async () => {
+  it("retries sign-out after a same-account refresh during cloudsync preflight", async () => {
     const currentSession = makeSession("bound-account");
     const refreshedSession = {
       ...makeSession("bound-account"),
@@ -1210,10 +1210,65 @@ describe("AuthProvider", () => {
       await preflight.promise;
     });
 
-    expect(mocks.signOut).not.toHaveBeenCalled();
-    expect(screen.getByTestId("access-token").textContent).toBe(
-      refreshedSession.access_token,
+    await waitFor(() => {
+      expect(mocks.signOut).toHaveBeenCalledWith({ scope: "local" });
+      expect(mocks.clearAuthStorage).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("access-token").textContent).toBe("none");
+    });
+    expect(mocks.prepareCloudsyncSignOut).toHaveBeenCalledTimes(2);
+    expect(mocks.prepareCloudsyncSignOut).toHaveBeenLastCalledWith(
+      refreshedSession,
+      expect.any(Function),
     );
+  });
+
+  it("does not retry sign-out when a different account wins during cloudsync preflight", async () => {
+    const currentSession = makeSession("bound-account");
+    const newSession = makeSession("new-account");
+    const preflight = deferred();
+    mocks.prepareCloudsyncSignOut.mockReturnValueOnce(preflight.promise);
+
+    renderAuthProvider();
+
+    await waitFor(() => {
+      expect(mocks.authCallback).not.toBeNull();
+    });
+
+    act(() => {
+      mocks.authCallback?.("SIGNED_IN", currentSession);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("session").textContent).toBe(
+        currentSession.user.id,
+      );
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+
+    await waitFor(() => {
+      expect(mocks.prepareCloudsyncSignOut).toHaveBeenCalledWith(
+        currentSession,
+        expect.any(Function),
+      );
+    });
+
+    act(() => {
+      mocks.authCallback?.("SIGNED_IN", newSession);
+    });
+
+    await act(async () => {
+      preflight.resolve();
+      await preflight.promise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("session").textContent).toBe(
+        newSession.user.id,
+      );
+    });
+    expect(mocks.prepareCloudsyncSignOut).toHaveBeenCalledTimes(1);
+    expect(mocks.signOut).not.toHaveBeenCalled();
   });
 
   it("reports remote sign-out as incomplete when a newer auth transition wins", async () => {

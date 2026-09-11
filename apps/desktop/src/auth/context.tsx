@@ -796,19 +796,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const signOutFromMain = useCallback(async (): Promise<boolean> => {
+  const signOutFromMainOnce = useCallback(async (): Promise<{
+    completed: boolean;
+    retryAfterRefresh: boolean;
+  }> => {
     if (!supabase) {
-      return false;
+      return { completed: false, retryAfterRefresh: false };
     }
 
     const transition = authTransitionRef.current;
-    const currentSession = session;
+    const currentSession = sessionRef.current;
     const rejectCurrentAccountMismatch = () =>
       rejectAccountMismatch(transition);
     await prepareCloudsyncSignOut(currentSession, rejectCurrentAccountMismatch);
 
     if (transition !== authTransitionRef.current) {
-      return authTransitionEventRef.current === "SIGNED_OUT";
+      return {
+        completed: authTransitionEventRef.current === "SIGNED_OUT",
+        retryAfterRefresh: authTransitionEventRef.current === "TOKEN_REFRESHED",
+      };
     }
 
     let shouldCleanUp = false;
@@ -817,7 +823,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const { error } = await supabase.auth.signOut({ scope: "local" });
       if (transition !== authTransitionRef.current) {
-        return authTransitionEventRef.current === "SIGNED_OUT";
+        return {
+          completed: authTransitionEventRef.current === "SIGNED_OUT",
+          retryAfterRefresh: false,
+        };
       }
 
       if (error) {
@@ -834,7 +843,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (e) {
       if (transition !== authTransitionRef.current) {
-        return authTransitionEventRef.current === "SIGNED_OUT";
+        return {
+          completed: authTransitionEventRef.current === "SIGNED_OUT",
+          retryAfterRefresh: false,
+        };
       }
 
       if (
@@ -856,19 +868,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         );
         if (result === "account_mismatch") {
           await rejectCurrentAccountMismatch();
-          return true;
+          return { completed: true, retryAfterRefresh: false };
         }
       }
       throw signOutError;
     }
 
     if (!shouldCleanUp || transition !== authTransitionRef.current) {
-      return false;
+      return { completed: false, retryAfterRefresh: false };
     }
 
     await enqueueAuthChange("SIGNED_OUT", null);
     if (authTransitionEventRef.current !== "SIGNED_OUT") {
-      return false;
+      return { completed: false, retryAfterRefresh: false };
     }
 
     try {
@@ -878,8 +890,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch {
       console.warn("[auth] sign-out could not be synchronized");
     }
-    return true;
-  }, [currentWindowLabel, enqueueAuthChange, rejectAccountMismatch, session]);
+    return { completed: true, retryAfterRefresh: false };
+  }, [currentWindowLabel, enqueueAuthChange, rejectAccountMismatch]);
+  const signOutFromMain = useCallback(async (): Promise<boolean> => {
+    const requestedUserId = sessionRef.current?.user.id ?? null;
+    const result = await signOutFromMainOnce();
+    if (result.completed) {
+      return true;
+    }
+
+    if (
+      !result.retryAfterRefresh ||
+      authTransitionEventRef.current !== "TOKEN_REFRESHED" ||
+      sessionRef.current?.user.id !== requestedUserId
+    ) {
+      return false;
+    }
+
+    return (await signOutFromMainOnce()).completed;
+  }, [signOutFromMainOnce]);
   const signOutFromMainRef = useLatestRef(signOutFromMain);
 
   useMountEffect(() => {
@@ -975,13 +1004,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     if (managesCloudsync) {
-      await signOutFromMain();
+      const completed = await signOutFromMain();
+      if (!completed) {
+        throw new Error("Sign-out was interrupted by an account change");
+      }
       return;
     }
 
     const transition = authTransitionRef.current;
     const completed = await coordinateMainSignOut();
-    if (!completed || transition !== authTransitionRef.current) {
+    if (!completed) {
+      throw new Error("The main window could not complete sign-out");
+    }
+    if (transition !== authTransitionRef.current) {
       return;
     }
     await rejectAuthChange(transition, true, true);
