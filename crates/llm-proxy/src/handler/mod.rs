@@ -137,10 +137,19 @@ pub(crate) struct AppState {
     pub(crate) client: Client,
 }
 
+fn provider_client() -> Client {
+    // The Railway-to-OpenRouter path is reliable over HTTP/1.1, while negotiated
+    // HTTP/2 requests can fail before an upstream response is received.
+    Client::builder()
+        .http1_only()
+        .build()
+        .expect("failed to build LLM provider client")
+}
+
 pub fn router(config: LlmProxyConfig) -> Router {
     let state = AppState {
         config,
-        client: Client::new(),
+        client: provider_client(),
     };
 
     Router::new()
@@ -152,7 +161,7 @@ pub fn router(config: LlmProxyConfig) -> Router {
 pub fn chat_completions_router(config: LlmProxyConfig) -> Router {
     let state = AppState {
         config,
-        client: Client::new(),
+        client: provider_client(),
     };
 
     Router::new()
@@ -386,6 +395,7 @@ async fn completions_handler(
             anlg_observability::mark_current_span_as_error(&error_type);
             tracing::error!(
                 error.type = %error_type,
+                error.message = %e,
                 service.peer.name = %provider_name,
                 "llm_upstream_request_failed"
             );
