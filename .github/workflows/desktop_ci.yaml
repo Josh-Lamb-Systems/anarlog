@@ -122,6 +122,8 @@ jobs:
         env:
           CI: false
           CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          POSTHOG_API_KEY: phc_selfhost_disabled
+          VITE_POSTHOG_API_KEY: phc_selfhost_disabled
           APP_VERSION: ${{ inputs.selfhost_version }}
           VITE_APP_VERSION: ${{ inputs.selfhost_version }}
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
