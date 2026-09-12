@@ -39,6 +39,10 @@ create extension "supabase-dbdev";
 select dbdev.install('basejump-supabase_test_helpers');
 create extension if not exists "basejump-supabase_test_helpers" version '0.0.6';
 
+update private.local_entitlement_settings
+set auto_grant_pro_to_new_users = false
+where singleton;
+
 create or replace function tests.authenticate_as_hyprnote_pro(identifier text)
 returns void
 language plpgsql
