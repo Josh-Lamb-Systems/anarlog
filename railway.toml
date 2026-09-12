@@ -1,0 +1,30 @@
+# Railway config for the anarlog web app (apps/web).
+#
+# Place at the REPOSITORY ROOT alongside railway.toml, then in the web service's
+# Settings > Config-as-code, set the path to "railway.web.toml".
+# The API service keeps using the default "railway.toml".
+#
+# This is NOT a static site. apps/web is TanStack Start + Nitro; the build emits
+# .output/public AND .output/server, and scripts/finalize-build.mjs throws if the
+# server output is missing. It must run as a Node service.
+
+[build]
+# Railpack is Railway's modern builder and handles pnpm dependency resolution
+# more robustly than Nixpacks. Removing the explicit builder directive lets
+# Railway auto-detect Railpack. This fixes the pnpm version conflict instability.
+
+buildCommand = "pnpm --filter @anlg/web build"
+
+[deploy]
+# Nitro's default node-server preset reads PORT from the environment, which
+# Railway injects. Do not set PORT yourself.
+startCommand = "node apps/web/.output/server/index.mjs"
+
+healthcheckPath = "/"
+healthcheckTimeout = 30
+
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+numReplicas = 1
+

@@ -1,6 +1,15 @@
 # https://github.com/tauri-apps/tauri-action/blob/3013cac/examples/test-build-only.yml
 on:
   workflow_dispatch:
+    inputs:
+      selfhost_macos_only:
+        description: "Build only an unsigned Apple-silicon app with repository deployment variables"
+        type: boolean
+        default: false
+      selfhost_version:
+        description: "Version embedded in the self-hosted test build"
+        type: string
+        default: "1.4.24"
   workflow_call:
     inputs:
       rebuild_cloudsync:
@@ -43,7 +52,7 @@ concurrency:
 
 jobs:
   js_ci:
-    if: ${{ !startsWith(github.head_ref || '', 'blog/') }}
+    if: ${{ !inputs.selfhost_macos_only && !startsWith(github.head_ref || '', 'blog/') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -55,8 +64,97 @@ jobs:
       - run: pnpm -F desktop typecheck
       - run: pnpm -F desktop test
 
+  selfhost_macos:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.selfhost_macos_only }}
+    runs-on: macos-26
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/install_desktop_deps
+        with:
+          target: macos
+      - uses: ./.github/actions/rust_install
+        with:
+          platform: macos
+      - run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/pnpm_install
+      - run: pnpm -F ui build
+      - name: Validate deployment variables
+        run: |
+          test -n "$VITE_SUPABASE_URL"
+          test -n "$VITE_SUPABASE_ANON_KEY"
+          test -n "$VITE_APP_URL"
+          test -n "$VITE_API_URL"
+          [[ "$APP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        env:
+          APP_VERSION: ${{ inputs.selfhost_version }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_APP_URL: https://anarlog-production.up.railway.app
+          VITE_API_URL: https://anarlog-api-production.up.railway.app
+      - run: ./scripts/version.sh "./apps/desktop/src-tauri/tauri.conf.json" "$APP_VERSION"
+        env:
+          APP_VERSION: ${{ inputs.selfhost_version }}
+      - run: TAURI_ENV_TARGET_TRIPLE=aarch64-apple-darwin cargo xtask prepare-binaries
+        env:
+          APP_VERSION: ${{ inputs.selfhost_version }}
+      - name: Build Apple-silicon app
+        working-directory: apps/desktop
+        run: |
+          BUILD_CONFIG=$(jq -nc --arg version "$APP_VERSION" '{version:$version,bundle:{createUpdaterArtifacts:false,externalBin:["binaries/check-permissions","binaries/char-chrome-native-host","resources/cli/anarlog-cli"]},plugins:{updater:{active:false}}}')
+          pnpm tauri build \
+            --target aarch64-apple-darwin \
+            --bundles app \
+            --config ./src-tauri/tauri.conf.stable.json \
+            --config ./src-tauri/tauri.conf.stable-macos.json \
+            --config "$BUILD_CONFIG" \
+            --no-sign \
+            --ci \
+            --ignore-version-mismatches
+        env:
+          CI: false
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          POSTHOG_API_KEY: phc_selfhost_disabled
+          VITE_POSTHOG_API_KEY: phc_selfhost_disabled
+          APP_VERSION: ${{ inputs.selfhost_version }}
+          VITE_APP_VERSION: ${{ inputs.selfhost_version }}
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          VITE_APP_URL: https://anarlog-production.up.railway.app
+          VITE_API_URL: https://anarlog-api-production.up.railway.app
+      - name: Verify and package app
+        id: package
+        run: |
+          APP="apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Anarlog.app"
+          test -d "$APP"
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")" = "$APP_VERSION"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          ARCHIVE="Anarlog-selfhost-$APP_VERSION-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ARCHIVE"
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          echo "archive=$ARCHIVE" >> "$GITHUB_OUTPUT"
+        env:
+          APP_VERSION: ${{ inputs.selfhost_version }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: anarlog-selfhost-macos-arm64-${{ github.sha }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 3
+
   macos_ci:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ !inputs.selfhost_macos_only && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     defaults:
       run:
         shell: bash
@@ -191,7 +289,7 @@ jobs:
             plugins/db/permissions/schemas/schema.json
 
   windows_ci:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ !inputs.selfhost_macos_only && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -404,7 +502,7 @@ jobs:
           retention-days: 7
 
   linux_ci:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ !inputs.selfhost_macos_only && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     strategy:
       fail-fast: false
       matrix:
@@ -623,7 +721,7 @@ jobs:
           retention-days: 7
 
   desktop_i18n:
-    if: ${{ !startsWith(github.head_ref || '', 'blog/') }}
+    if: ${{ !inputs.selfhost_macos_only && !startsWith(github.head_ref || '', 'blog/') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -634,7 +732,7 @@ jobs:
       - run: pnpm -F desktop i18n:check
 
   desktop_swift:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ !inputs.selfhost_macos_only && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: macos-15
     defaults:
       run:
@@ -650,6 +748,7 @@ jobs:
     if: always()
     needs: [
       js_ci,
+      selfhost_macos,
       macos_ci,
       windows_ci,
       linux_ci,
