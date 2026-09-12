@@ -1,0 +1,72 @@
+name: Upstream Release Watch
+
+on:
+  schedule:
+    - cron: "17 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-release-watch
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: github.repository == 'Josh-Lamb-Systems/anarlog'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="$(
+            gh api 'repos/fastrepl/anarlog/releases?per_page=100' \
+              --jq 'map(select(.draft == false and .prerelease == false and (.tag_name | test("^desktop_v[0-9]+\\.[0-9]+\\.[0-9]+$")))) | .[0].tag_name // empty'
+          )"
+
+          if [[ ! "$TAG" =~ ^desktop_v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::No stable upstream desktop release was found"
+            exit 1
+          fi
+
+          git remote add upstream https://github.com/fastrepl/anarlog.git
+          git fetch --no-tags upstream "refs/tags/$TAG:refs/tags/$TAG"
+
+          if git merge-base --is-ancestor "refs/tags/$TAG^{}" HEAD; then
+            echo "$TAG is already integrated"
+            exit 0
+          fi
+
+          TITLE="Sync upstream $TAG"
+          ISSUE_NUMBER="$(
+            gh issue list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --search "$TITLE in:title" \
+              --json number,title \
+              --jq ".[] | select(.title == \"$TITLE\") | .number"
+          )"
+
+          if [[ -n "$ISSUE_NUMBER" ]]; then
+            echo "Issue #$ISSUE_NUMBER already tracks $TAG"
+            exit 0
+          fi
+
+          BODY="$(printf '%s\n' \
+            "Upstream published [$TAG](https://github.com/fastrepl/anarlog/releases/tag/$TAG), and that release is not yet contained in \`main\`." \
+            "" \
+            "Create a \`chore/sync-upstream-${TAG#desktop_v}\` branch from current \`main\`, merge \`refs/tags/$TAG\` with \`--no-ff\`, resolve conflicts, and validate the fork-specific Railway, Supabase, and macOS build paths before merging." \
+            "" \
+            "This issue was created by the upstream release watcher. It does not merge or deploy upstream code automatically.")"
+
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TITLE" \
+            --body "$BODY"
