@@ -1,8 +1,6 @@
 name: Desktop Nightly
 
 on:
-  schedule:
-    - cron: "0 15 * * *"
   workflow_dispatch:
 
 permissions:
