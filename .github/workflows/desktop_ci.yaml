@@ -15,8 +15,6 @@ on:
       rebuild_cloudsync:
         type: boolean
         default: false
-  schedule:
-    - cron: "0 9 * * *"
   push:
     branches:
       - main
